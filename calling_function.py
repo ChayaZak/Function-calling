@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 
 MODEL = "gemini-2.5-flash"
 QUESTION = "What is the weather in Tel Aviv? "
+# QUESTION = "2+9"
+
 
 
 
@@ -52,6 +54,23 @@ TOOLS = [
         "required": ["city"],
         "additionalProperties": False,
     }
+    },
+    {
+        "type": "function",
+        "name": "calculator",
+        "description": "Returns the calculate answer for given numbers.",
+        "script": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "expression": {
+                    "type": "string",
+                    "description": "A math expression, e.g. '15 * 7 + 3'"
+                }
+            },
+            "required": ["expression"],
+            "additionalProperties": False,
+        }
     }
 ]
 
@@ -68,12 +87,21 @@ def get_weather(city: str) -> dict[str, Any]:
         }
     return { "found": True, **weather }
 
+def calculator(expression: str) -> dict[str, Any]:
+    try:
+        result = eval(expression)
+        return {"found": True, "result": result}
+    except Exception as error:
+        return {"found": False, "error": str(error)}
 
 def call_tool(name: str, argument: dict[str, Any], available_tools: dict[str, ToolFunction]) -> dict[str, Any]:
     tool_function = available_tools.get(name)
     if tool_function is None:
         return {"error": f"Tool {name} not found"}
-    return tool_function(**argument)
+    try:
+        return tool_function(**argument)
+    except Exception as error:
+        return {"error": f"Tool execution failed: {error}"}
 
 def ask_llm(client: genai.Client, model: str, history: list[types.Content])-> types.GenerateContentResponse:
     sdk_tools = types.Tool(
@@ -97,7 +125,8 @@ def ask_llm(client: genai.Client, model: str, history: list[types.Content])-> ty
     return response
 
 def run_demo(client: genai.Client, model: str, question: str) -> str:
-    available_tools: dict[str, ToolFunction] = {"get_weather": get_weather}
+    print(question)
+    available_tools: dict[str, ToolFunction] = {"get_weather": get_weather, "calculator": calculator}
 
     history: list[types.Content] = [
         types.Content(role="user", parts=[types.Part(text=question)])
@@ -155,6 +184,7 @@ def run_demo(client: genai.Client, model: str, question: str) -> str:
                 types.Part(
                     function_response=types.FunctionResponse(
                         name=fc.name,
+                        id=fc.id,
                         response=result,   # dict, not JSON string
                     )
                 )
@@ -167,9 +197,12 @@ def run_demo(client: genai.Client, model: str, question: str) -> str:
     return "Max rounds reached without a final answer."
 
 
-def nain() -> None:
+def main() -> None:
     load_dotenv()
     api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        print("Error: GEMINI_API_KEY environment variable not set.")
+        return
 
     client = genai.Client(api_key=api_key)
 
@@ -183,6 +216,6 @@ def nain() -> None:
 
 
 if __name__ == "__main__":
-    nain()
+    main()
 
 
