@@ -1,7 +1,5 @@
 import json
 import os
-
-from datetime import datetime
 from typing import Any, Callable
 
 from google import genai
@@ -9,19 +7,18 @@ from google.genai import types
 
 from dotenv import load_dotenv
 
-from schemas import AGENT_TOOLS, FINAL_OUTPUT_SCHEMA
 
-MODEL = "gemini-2.5-flash-lite"
-QUESTION = "What is the weather in Tel Aviv right now, and what time is it?"
+MODEL = "gemini-2.5-flash"
+QUESTION = "What is the weather in Tel Aviv? "
+
+
 
 SYSTEM_PROMPT = """You are a helpful assistant with access to tools.
+Use the tools to gather all the information needed to answer the user.
 
-Rules:
-- You MUST call the relevant tool(s) before answering — never answer from memory.
-- Every fact in your answer must come from a tool result.
-- Call all needed tools first, then give the final answer.
-
-When all tool calls are done, respond ONLY with this exact JSON (no markdown, no extra text):
+When you have finished all tool calls and are ready to give the final answer,
+respond ONLY with a valid JSON object — no markdown fences, no extra prose.
+Use this exact schema (field order matters — reasoning must come first):
 
 {
   "reasoning": "<step-by-step explanation of what you did and why>",
@@ -38,6 +35,25 @@ WEATHER = {
     "berlin": {"city": "berlin",  "temperature_C": 11, "condition": "Overcast"}
 }
 
+TOOLS = [
+    {
+    "type": "function",
+    "name": "get_weather",
+    "description": "Returns the current weather for a given city.",
+    "script": True,
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "city": {
+                "type": "string",
+                "description": "The city name, e.g. 'Tel Aviv' or 'London'"
+            }
+        },
+        "required": ["city"],
+        "additionalProperties": False,
+    }
+    }
+]
 
 ToolFunction = Callable[..., dict[str, Any]]
 
@@ -52,13 +68,6 @@ def get_weather(city: str) -> dict[str, Any]:
         }
     return { "found": True, **weather }
 
-def get_current_time() -> dict[str, Any]:
-    now = datetime.now()
-    return {
-        "found": True,
-        "time": now.strftime("%H:%M"),
-        "timezone": "IDT",
-    }
 
 def call_tool(name: str, argument: dict[str, Any], available_tools: dict[str, ToolFunction]) -> dict[str, Any]:
     tool_function = available_tools.get(name)
@@ -74,7 +83,7 @@ def ask_llm(client: genai.Client, model: str, history: list[types.Content])-> ty
                 description=tool.get("description", ""),
                 parameters_json_schema=tool.get("parameters"),
             )
-            for tool in AGENT_TOOLS
+            for tool in TOOLS
         ]
     )
     response = client.models.generate_content(
@@ -88,10 +97,8 @@ def ask_llm(client: genai.Client, model: str, history: list[types.Content])-> ty
     return response
 
 def run_demo(client: genai.Client, model: str, question: str) -> str:
-    available_tools: dict[str, ToolFunction] = {
-        "get_weather": get_weather,
-        "get_current_time": get_current_time
-    }
+    available_tools: dict[str, ToolFunction] = {"get_weather": get_weather}
+
     history: list[types.Content] = [
         types.Content(role="user", parts=[types.Part(text=question)])
     ]
@@ -100,6 +107,7 @@ def run_demo(client: genai.Client, model: str, question: str) -> str:
         print(f"[round {round_number}] calling LLM …")
         response = ask_llm(client, model, history)
 
+        # candidates and content can be None — guard defensively
         if not response.candidates:
             return "No candidates returned from model."
 
@@ -108,29 +116,38 @@ def run_demo(client: genai.Client, model: str, question: str) -> str:
         if content is None:
             return "Empty content returned from model."
 
+        # Append model turn to history
         history.append(content)
 
+        # Collect function-call parts
         tool_call_parts = [
             part for part in content.parts
             if part.function_call is not None
         ]
 
+        # No tool calls → model is done; extract JSON final answer
         if not tool_call_parts:
-            print(f"[round {round_number}] no tool calls — requesting final answer …")
-            raw = response.text
-
-            if not raw:
-                return "Model returned empty final response."
+            raw_text = "".join(
+                part.text for part in content.parts if part.text
+            ).strip()
+            if raw_text.startswith("```"):
+                raw_text = raw_text.split("```")[1]
+                if raw_text.startswith("json"):
+                    raw_text = raw_text[4:]
+                raw_text = raw_text.strip()
             try:
-                parsed = json.loads(raw)
-                return parsed.get("final_answer", raw)
+                parsed = json.loads(raw_text)
+                return parsed.get("final_answer", raw_text)
             except json.JSONDecodeError:
-                return raw
+                return raw_text
 
+        # Execute tool calls and feed results back as role="user"
+        # (the SDK only accepts "user" or "model" as Content roles;
+        #  function responses must come from the "user" side)
         tool_response_parts: list[types.Part] = []
         for part in tool_call_parts:
             fc = part.function_call
-            arguments = dict(fc.args) if fc.args else {}
+            arguments = dict(fc.args)
             print(f"  → tool call : {fc.name}({arguments})")
             result = call_tool(fc.name, arguments, available_tools)
             print(f"  ← tool result: {result}")
@@ -138,7 +155,7 @@ def run_demo(client: genai.Client, model: str, question: str) -> str:
                 types.Part(
                     function_response=types.FunctionResponse(
                         name=fc.name,
-                        response=result,
+                        response=result,   # dict, not JSON string
                     )
                 )
             )
@@ -150,13 +167,11 @@ def run_demo(client: genai.Client, model: str, question: str) -> str:
     return "Max rounds reached without a final answer."
 
 
-def main() -> None:
+def nain() -> None:
     load_dotenv()
     api_key = os.getenv("GEMINI_API_KEY")
 
     client = genai.Client(api_key=api_key)
-
-    print(QUESTION)
 
     try:
         final_answer = run_demo(client, MODEL, QUESTION)
@@ -168,5 +183,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    nain()
+
 
