@@ -1,6 +1,4 @@
-# schemas.py
 
-# סכמה עבור התשובה הסופית של המודל
 FINAL_OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -19,10 +17,8 @@ FINAL_OUTPUT_SCHEMA = {
         }
     },
     "required": ["reasoning", "tools_used", "final_answer"],
-    "additionalProperties": False
 }
 
-# רשימת הכלים (Tools) שהסוכן מכיר
 AGENT_TOOLS = [
     {
         "type": "function",
@@ -46,7 +42,24 @@ AGENT_TOOLS = [
         "description": "Returns the current local time.",
         "parameters": {
             "type": "object",
-            "properties": {}, # אין צורך בפרמטרים לפונקציה הזו
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        }
+    },
+    {
+        "type": "function",
+        "name": "calculator",
+        "description": "Evaluates a safe mathematical expression and returns the numeric result.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "expression": {
+                    "type": "string",
+                    "description": "A mathematical expression to evaluate, e.g. '2 + 2' or '15 * 4 / 2'"
+                }
+            },
+            "required": ["expression"],
             "additionalProperties": False,
         }
     }
